@@ -17,6 +17,7 @@ class SavedHtmlProcessor:
         """Initialize the processor with the directory containing saved HTML files."""
         self.html_dir = html_dir
         self.releases = []
+        self.chart_releases = []
         self.current_date = datetime.now().strftime('%Y-%m-%d')
         
         # Ensure files directory exists
@@ -42,6 +43,12 @@ class SavedHtmlProcessor:
             # Log page title for verification
             page_title = soup.title.string if soup.title else "No title found"
             logger.info(f"Page title: {page_title}")
+            
+            # Check if this is a chart page
+            chart_section = soup.find('section', id='page_charts_section_charts')
+            if chart_section:
+                logger.info("Found chart section, processing as chart page")
+                return self.process_chart_page(soup, html_file)
             
             # Find the user_list table - NOTE: this is an ID, not a class
             user_list = soup.find('table', id='user_list')
@@ -111,7 +118,8 @@ class SavedHtmlProcessor:
                         "link": link,
                         "new": True,
                         "scraped_on": self.current_date,
-                        "source_file": str(html_file)
+                        "source_file": str(html_file),
+                        "source_type": "releases"
                     }
                     
                     file_releases.append(release)
@@ -125,6 +133,79 @@ class SavedHtmlProcessor:
         
         except Exception as e:
             logger.error(f"Error processing {html_file}: {e}")
+            return 0
+    
+    def process_chart_page(self, soup, html_file):
+        """Process a chart page and extract chart release data."""
+        logger.info(f"Processing chart page: {html_file}")
+        try:
+            # Find all chart items
+            chart_items = soup.find_all('div', class_='page_charts_section_charts_item')
+            logger.info(f"Found {len(chart_items)} chart items")
+            
+            file_chart_releases = []
+            for item in chart_items:
+                try:
+                    # Extract album title
+                    title_element = item.find('span', class_='ui_name_locale_original')
+                    if not title_element:
+                        continue
+                    album = title_element.text.strip()
+                    
+                    # Extract artist name
+                    artist_container = item.find('div', class_='page_charts_section_charts_item_credited_text')
+                    if artist_container:
+                        artist_element = artist_container.find('span', class_='ui_name_locale_original')
+                        artist = artist_element.text.strip() if artist_element else artist_container.text.strip()
+                    else:
+                        continue
+                    
+                    # Extract album URL
+                    link_element = item.find('a', class_='page_charts_section_charts_item_link')
+                    link = ""
+                    if link_element and 'href' in link_element.attrs:
+                        link = link_element['href']
+                        # If link is relative, make it absolute
+                        if link and not link.startswith('http'):
+                            link = f"https://rateyourmusic.com{link}"
+                    
+                    # Extract album rating
+                    rating_element = item.find('span', class_='page_charts_section_charts_item_details_average_num')
+                    rating = rating_element.text.strip() if rating_element else "N/A"
+                    
+                    # Extract primary genres
+                    genres = []
+                    genres_container = item.find('div', class_='page_charts_section_charts_item_genres_primary')
+                    if genres_container:
+                        for genre_element in genres_container.find_all('a', class_='genre'):
+                            genres.append(genre_element.text.strip())
+                    
+                    chart_release = {
+                        "artist": artist,
+                        "album": album,
+                        "link": link,
+                        "rating": rating,
+                        "genres": genres,
+                        "new": True,
+                        "scraped_on": self.current_date,
+                        "source_file": str(html_file),
+                        "source_type": "chart"
+                    }
+                    
+                    file_chart_releases.append(chart_release)
+                except Exception as e:
+                    logger.error(f"Error processing chart item: {e}")
+                    continue
+            
+            logger.info(f"Extracted {len(file_chart_releases)} chart releases from {html_file}")
+            
+            # Add to chart releases list
+            self.chart_releases.extend(file_chart_releases)
+            
+            return len(file_chart_releases)
+            
+        except Exception as e:
+            logger.error(f"Error processing chart page {html_file}: {e}")
             return 0
     
     def load_previous_data(self):
@@ -165,37 +246,53 @@ class SavedHtmlProcessor:
         previous_lookup = {f"{item['artist']}:{item['album']}": item for item in previous_data}
         
         # Update 'new' flag for current releases
-        for release in self.releases:
+        all_releases = self.releases + self.chart_releases
+        for release in all_releases:
             key = f"{release['artist']}:{release['album']}"
             if key in previous_lookup:
                 release['new'] = False
         
-        new_count = sum(1 for release in self.releases if release['new'])
-        logger.info(f"Found {new_count} new releases out of {len(self.releases)} total releases")
+        new_count = sum(1 for release in all_releases if release['new'])
+        logger.info(f"Found {new_count} new releases out of {len(all_releases)} total releases")
     
     def remove_duplicates(self):
         """Remove duplicate releases based on artist and album."""
         # Use a dictionary to identify unique releases
         unique_releases = {}
         
+        # Process regular releases
         for release in self.releases:
             key = f"{release['artist']}:{release['album']}"
             if key not in unique_releases:
                 unique_releases[key] = release
         
+        # Process chart releases
+        unique_chart_releases = {}
+        for release in self.chart_releases:
+            key = f"{release['artist']}:{release['album']}"
+            if key not in unique_chart_releases:
+                unique_chart_releases[key] = release
+        
         # Update releases list with unique items
         original_count = len(self.releases)
         self.releases = list(unique_releases.values())
         
-        logger.info(f"Removed {original_count - len(self.releases)} duplicate releases")
+        original_chart_count = len(self.chart_releases)
+        self.chart_releases = list(unique_chart_releases.values())
+        
+        logger.info(f"Removed {original_count - len(self.releases)} duplicate regular releases")
+        logger.info(f"Removed {original_chart_count - len(self.chart_releases)} duplicate chart releases")
     
     def save_data(self):
         """Save release data to JSON file."""
+        # Combine regular and chart releases
+        all_releases = self.releases + self.chart_releases
+        
         filename = f"files/albums-{self.current_date}.json"
         
         try:
             with open(filename, 'w', encoding='utf-8') as f:
-                json.dump(self.releases, f, indent=2, ensure_ascii=False)
+                json.dump(all_releases, f, indent=2, ensure_ascii=False)
             logger.info(f"Data saved to {filename}")
             return filename
         except IOError as e:
@@ -204,10 +301,12 @@ class SavedHtmlProcessor:
     
     def generate_html(self):
         """Generate HTML page showing new releases in alphabetical order by artist."""
-        new_releases = [release for release in self.releases if release['new']]
+        # Combine and filter new releases
+        all_releases = self.releases + self.chart_releases
+        new_releases = [release for release in all_releases if release['new']]
         
         # Sort new releases alphabetically by artist name
-        new_releases.sort(key=lambda x: x['artist'].lower())
+        new_releases.sort(key=lambda x: x['artist'].lower() if x.get('artist') else '')
         
         html_content = f"""<!DOCTYPE html>
 <html lang="en">
@@ -223,7 +322,7 @@ class SavedHtmlProcessor:
             padding: 20px;
             line-height: 1.6;
         }}
-        h1 {{
+        h1, h2 {{
             color: #333;
             border-bottom: 1px solid #ddd;
             padding-bottom: 10px;
@@ -256,6 +355,46 @@ class SavedHtmlProcessor:
             margin-top: 20px;
             border-radius: 3px;
         }}
+        .chart-item {{
+            display: flex;
+            flex-wrap: nowrap;
+            align-items: center;
+            white-space: nowrap;
+        }}
+        .item-main {{
+            margin-right: 10px;
+            white-space: normal;
+        }}
+        .rating {{
+            display: inline-block;
+            margin-left: 10px;
+            background-color: #e9e9e9;
+            padding: 2px 6px;
+            border-radius: 3px;
+            font-size: 0.9em;
+        }}
+        .rating-high {{
+            background-color: #c8e6c9;
+            color: #2e7d32;
+            font-weight: bold;
+        }}
+        .genres {{
+            font-size: 0.8em;
+            color: #555;
+            margin-top: 3px;
+        }}
+        .source-type {{
+            display: inline-block;
+            font-size: 0.8em;
+            background-color: #eee;
+            border-radius: 3px;
+            padding: 1px 5px;
+            margin-left: 5px;
+        }}
+        .unknown {{
+            color: #999;
+            font-style: italic;
+        }}
     </style>
 </head>
 <body>
@@ -270,7 +409,11 @@ class SavedHtmlProcessor:
             current_letter = None
             
             for release in new_releases:
-                first_letter = release['artist'][0].upper()
+                artist = release.get('artist', '')
+                if not artist:
+                    first_letter = '#'  # Use # for releases with no artist
+                else:
+                    first_letter = artist[0].upper()
                 
                 # Add letter heading when first letter changes
                 if first_letter != current_letter:
@@ -279,8 +422,37 @@ class SavedHtmlProcessor:
                 {current_letter}
             </li>\n"""
                 
-                html_content += f"""        <li>
-                {release['artist']} - <a href="{release['link']}" target="_blank">{release['album']}</a>
+                # Check if it's a chart release or regular release and format accordingly
+                if release.get('source_type') == 'chart':
+                    genres_text = ", ".join(release.get('genres', []))
+                    genres_html = f'<div class="genres">Genres: {genres_text}</div>' if genres_text else ''
+                    
+                    artist_display = artist if artist else '<span class="unknown">Unknown Artist</span>'
+                    album_display = release.get('album', '<span class="unknown">Unknown Album</span>')
+                    
+                    # Check if rating is high (3.60 or higher)
+                    rating_value = release.get('rating', 'N/A')
+                    try:
+                        is_high_rating = float(rating_value) >= 3.60
+                        rating_class = "rating rating-high" if is_high_rating else "rating"
+                    except (ValueError, TypeError):
+                        rating_class = "rating"
+                    
+                    html_content += f"""        <li>
+                <div>
+                    <span class="item-main">{artist_display} - <a href="{release.get('link', '#')}" target="_blank">{album_display}</a></span>
+                    <span class="{rating_class}">{rating_value}</span>
+                    <span class="source-type">Chart</span>
+                </div>
+                {genres_html}
+            </li>\n"""
+                else:
+                    artist_display = artist if artist else '<span class="unknown">Unknown Artist</span>'
+                    album_display = release.get('album', '<span class="unknown">Unknown Album</span>')
+                    
+                    html_content += f"""        <li>
+                {artist_display} - <a href="{release.get('link', '#')}" target="_blank">{album_display}</a>
+                <span class="source-type">Release</span>
             </li>\n"""
             
             html_content += "    </ul>\n"
@@ -334,7 +506,9 @@ class SavedHtmlProcessor:
             if html_file:
                 logger.info(f"View new releases at {html_file}")
             
-            return len([r for r in self.releases if r['new']])
+            # Count new releases from both regular and chart sources
+            new_count = len([r for r in self.releases if r['new']]) + len([r for r in self.chart_releases if r['new']])
+            return new_count
         except Exception as e:
             logger.error(f"An error occurred during execution: {e}")
             return -1
