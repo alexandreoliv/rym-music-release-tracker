@@ -317,63 +317,79 @@ class SavedHtmlProcessor:
     
     def compare_and_update(self):
         """Compare current data with previous data and update 'new' flag."""
+        # NOTE: This now runs *after* remove_duplicates, operating on the combined list
         previous_data = self.load_previous_data()
         
         if not previous_data:
             logger.info("No previous data found. All entries marked as new.")
+            # Ensure all items in the combined list are marked new by default
+            for release in self.releases:
+                release['new'] = True
             return
             
         # Create lookup dictionary for previous data
         previous_lookup = {f"{item['artist']}:{item['album']}": item for item in previous_data}
         
-        # Update 'new' flag for current releases
-        all_releases = self.releases + self.chart_releases
-        for release in all_releases:
+        # Update 'new' flag for current combined releases
+        # All releases in self.releases are unique at this point
+        for release in self.releases:
             key = f"{release['artist']}:{release['album']}"
             if key in previous_lookup:
                 release['new'] = False
+            else:
+                release['new'] = True # Explicitly mark as new if not found
         
-        new_count = sum(1 for release in all_releases if release['new'])
-        logger.info(f"Found {new_count} new releases out of {len(all_releases)} total releases")
+        new_count = sum(1 for release in self.releases if release['new'])
+        logger.info(f"Found {new_count} new releases out of {len(self.releases)} total releases")
     
     def remove_duplicates(self):
-        """Remove duplicate releases based on artist and album."""
-        # Use a dictionary to identify unique releases
-        unique_releases = {}
+        """Combine chart and regular releases, remove duplicates, prioritizing chart data."""
+        all_raw_releases = self.releases + self.chart_releases
+        original_total_count = len(all_raw_releases)
+        logger.info(f"Starting deduplication for {original_total_count} total raw releases.")
         
-        # Process regular releases
-        for release in self.releases:
-            key = f"{release['artist']}:{release['album']}"
-            if key not in unique_releases:
-                unique_releases[key] = release
+        unique_all_releases = {}
         
-        # Process chart releases
-        unique_chart_releases = {}
-        for release in self.chart_releases:
-            key = f"{release['artist']}:{release['album']}"
-            if key not in unique_chart_releases:
-                unique_chart_releases[key] = release
+        for release in all_raw_releases:
+            # Basic normalization: lowercasing and stripping whitespace
+            # More advanced normalization could be added here if needed
+            artist_norm = release.get('artist', '').strip().lower()
+            album_norm = release.get('album', '').strip().lower()
+            
+            if not artist_norm or not album_norm:
+                logger.warning(f"Skipping release with missing artist/album during deduplication: {release}")
+                continue # Skip entries with missing artist or album for keying
+                
+            key = f"{artist_norm}:{album_norm}"
+            
+            if key in unique_all_releases:
+                # Key exists, check if current release is 'chart' and existing is not
+                existing_release = unique_all_releases[key]
+                if release.get('source_type') == 'chart' and existing_release.get('source_type') != 'chart':
+                    # Prioritize chart release by replacing the existing one
+                    logger.debug(f"Duplicate key '{key}'. Prioritizing chart data over existing release data.")
+                    unique_all_releases[key] = release
+                # Optionally: could merge data here if needed (e.g., keep genres/rating)
+            else:
+                # New key, add the release
+                unique_all_releases[key] = release
+                
+        # Update self.releases to be the final deduplicated list
+        self.releases = list(unique_all_releases.values())
+        self.chart_releases = [] # Clear the separate chart list as it's now merged
         
-        # Update releases list with unique items
-        original_count = len(self.releases)
-        self.releases = list(unique_releases.values())
-        
-        original_chart_count = len(self.chart_releases)
-        self.chart_releases = list(unique_chart_releases.values())
-        
-        logger.info(f"Removed {original_count - len(self.releases)} duplicate regular releases")
-        logger.info(f"Removed {original_chart_count - len(self.chart_releases)} duplicate chart releases")
+        final_count = len(self.releases)
+        removed_count = original_total_count - final_count
+        logger.info(f"Removed {removed_count} duplicate releases. Final count: {final_count}")
     
     def save_data(self):
-        """Save release data to JSON file."""
-        # Combine regular and chart releases
-        all_releases = self.releases + self.chart_releases
-        
+        """Save the combined, deduplicated release data to JSON file."""
+        # Data is already combined and deduplicated in self.releases
         filename = f"files/albums-{self.current_date}.json"
         
         try:
             with open(filename, 'w', encoding='utf-8') as f:
-                json.dump(all_releases, f, indent=2, ensure_ascii=False)
+                json.dump(self.releases, f, indent=2, ensure_ascii=False) # Save self.releases directly
             logger.info(f"Data saved to {filename}")
             return filename
         except IOError as e:
@@ -381,13 +397,12 @@ class SavedHtmlProcessor:
             return None
     
     def generate_html(self):
-        """Generate HTML page showing new releases in alphabetical order by artist."""
-        # Combine and filter new releases
-        all_releases = self.releases + self.chart_releases
-        new_releases = [release for release in all_releases if release['new']]
+        """Generate HTML page showing new releases from the combined list."""
+        # Filter new releases from the combined list
+        new_releases = [release for release in self.releases if release.get('new', True)] # Use .get for safety
         
         # Sort new releases alphabetically by artist name
-        new_releases.sort(key=lambda x: x['artist'].lower() if x.get('artist') else '')
+        new_releases.sort(key=lambda x: x.get('artist', '').lower())
         
         html_content = f"""<!DOCTYPE html>
 <html lang="en">
@@ -396,57 +411,57 @@ class SavedHtmlProcessor:
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>New Music Releases - {self.current_date}</title>
     <style>
-        body {{
+        body {{ 
             font-family: Arial, sans-serif;
             max-width: 800px;
             margin: 0 auto;
             padding: 20px;
             line-height: 1.6;
         }}
-        h1, h2 {{
+        h1, h2 {{ 
             color: #333;
             border-bottom: 1px solid #ddd;
             padding-bottom: 10px;
         }}
-        ul {{
+        ul {{ 
             list-style-type: none;
             padding: 0;
         }}
-        li {{
+        li {{ 
             margin-bottom: 10px;
             padding: 10px;
             background-color: #f9f9f9;
             border-radius: 5px;
         }}
-        a {{
+        a {{ 
             color: #0066cc;
             text-decoration: none;
         }}
-        a:hover {{
+        a:hover {{ 
             text-decoration: underline;
         }}
-        .date {{
+        .date {{ 
             color: #666;
             font-size: 0.8em;
         }}
-        .letter-heading {{
+        .letter-heading {{ 
             background-color: #333;
             color: white;
             padding: 5px 10px;
             margin-top: 20px;
             border-radius: 3px;
         }}
-        .chart-item {{
+        .chart-item {{ 
             display: flex;
             flex-wrap: nowrap;
             align-items: center;
             white-space: nowrap;
         }}
-        .item-main {{
+        .item-main {{ 
             margin-right: 10px;
             white-space: normal;
         }}
-        .rating {{
+        .rating {{ 
             display: inline-block;
             margin-left: 10px;
             background-color: #e9e9e9;
@@ -454,17 +469,17 @@ class SavedHtmlProcessor:
             border-radius: 3px;
             font-size: 0.9em;
         }}
-        .rating-high {{
+        .rating-high {{ 
             background-color: #c8e6c9;
             color: #2e7d32;
             font-weight: bold;
         }}
-        .genres {{
+        .genres {{ 
             font-size: 0.8em;
             color: #555;
             margin-top: 3px;
         }}
-        .source-type {{
+        .source-type {{ 
             display: inline-block;
             font-size: 0.8em;
             background-color: #eee;
@@ -472,7 +487,7 @@ class SavedHtmlProcessor:
             padding: 1px 5px;
             margin-left: 5px;
         }}
-        .unknown {{
+        .unknown {{ 
             color: #999;
             font-style: italic;
         }}
@@ -491,10 +506,8 @@ class SavedHtmlProcessor:
             
             for release in new_releases:
                 artist = release.get('artist', '')
-                if not artist:
-                    first_letter = '#'  # Use # for releases with no artist
-                else:
-                    first_letter = artist[0].upper()
+                # Use normalized artist name for sorting/grouping if desired, but display original
+                first_letter = artist[0].upper() if artist else '#' 
                 
                 # Add letter heading when first letter changes
                 if first_letter != current_letter:
@@ -503,36 +516,36 @@ class SavedHtmlProcessor:
                 {current_letter}
             </li>\n"""
                 
-                # Check if it's a chart release or regular release and format accordingly
-                if release.get('source_type') == 'chart':
+                # Display logic remains similar, checks source_type if available
+                source_type = release.get('source_type', 'release') # Default to 'release' if missing
+                artist_display = artist if artist else '<span class="unknown">Unknown Artist</span>'
+                album_display = release.get('album', '<span class="unknown">Unknown Album</span>')
+                link_display = release.get('link', '#')
+
+                if source_type == 'chart':
                     genres_text = ", ".join(release.get('genres', []))
                     genres_html = f'<div class="genres">Genres: {genres_text}</div>' if genres_text else ''
                     
-                    artist_display = artist if artist else '<span class="unknown">Unknown Artist</span>'
-                    album_display = release.get('album', '<span class="unknown">Unknown Album</span>')
-                    
-                    # Check if rating is high (3.60 or higher)
                     rating_value = release.get('rating', 'N/A')
                     try:
-                        is_high_rating = float(rating_value) >= 3.60
+                        # Ensure rating_value is treated as string before float conversion
+                        is_high_rating = float(str(rating_value)) >= 3.60 
                         rating_class = "rating rating-high" if is_high_rating else "rating"
                     except (ValueError, TypeError):
                         rating_class = "rating"
+                        rating_value = 'N/A' # Ensure N/A if conversion fails
                     
                     html_content += f"""        <li>
                 <div>
-                    <span class="item-main">{artist_display} - <a href="{release.get('link', '#')}" target="_blank">{album_display}</a></span>
+                    <span class="item-main">{artist_display} - <a href="{link_display}" target="_blank">{album_display}</a></span>
                     <span class="{rating_class}">{rating_value}</span>
                     <span class="source-type">Chart</span>
                 </div>
                 {genres_html}
             </li>\n"""
-                else:
-                    artist_display = artist if artist else '<span class="unknown">Unknown Artist</span>'
-                    album_display = release.get('album', '<span class="unknown">Unknown Album</span>')
-                
-                html_content += f"""        <li>
-                {artist_display} - <a href="{release.get('link', '#')}" target="_blank">{album_display}</a>
+                else: # source_type is 'releases' or default
+                    html_content += f"""        <li>
+                <span class="item-main">{artist_display} - <a href="{link_display}" target="_blank">{album_display}</a></span>
                 <span class="source-type">Release</span>
             </li>\n"""
             
@@ -563,42 +576,51 @@ class SavedHtmlProcessor:
                 return 0
             
             total_processed = 0
-            for html_file in html_files:
-                count = self.process_html_file(html_file)
-                total_processed += count
+            # Process files and populate self.releases and self.chart_releases
+            for html_file_path in html_files:
+                count = self.process_html_file(html_file_path)
+                # Count here might not represent final unique count, just items found per file
+                # total_processed += count # This count isn't very meaningful anymore
             
-            if total_processed == 0:
-                logger.warning("No releases were found in any of the HTML files")
-                return 0
-            
-            # Remove any duplicate entries
+            # Now combine and deduplicate
             self.remove_duplicates()
             
-            # Compare with previous data
+            # Now compare the unique list against previous data
             self.compare_and_update()
             
-            # Save data to JSON
-            self.save_data()
+            # Check if any releases remain after deduplication
+            if not self.releases:
+                 logger.warning("No valid releases found after processing and deduplication.")
+                 return 0
             
-            # Generate HTML report
-            html_file = self.generate_html()
+            # Save the final deduplicated and updated data
+            json_filename = self.save_data()
+            if not json_filename:
+                logger.error("Failed to save JSON data.")
+                # Decide if we should proceed without saving?
+            
+            # Generate HTML report from the final list
+            html_filename = self.generate_html()
             
             logger.info("Music release processing completed successfully")
-            if html_file:
-                logger.info(f"View new releases at {html_file}")
-            
+            if html_filename:
+                logger.info(f"View new releases at {html_filename}")
+                
                 # Open the HTML file in the default web browser
                 try:
-                    logger.info(f"Opening {html_file} in web browser...")
-                    webbrowser.open(f"file://{os.path.abspath(html_file)}")
+                    logger.info(f"Opening {html_filename} in web browser...")
+                    webbrowser.open(f"file://{os.path.abspath(html_filename)}")
                 except Exception as e:
                     logger.error(f"Failed to open HTML file in browser: {e}")
             
-            # Count new releases from both regular and chart sources
-            new_count = len([r for r in self.releases if r['new']]) + len([r for r in self.chart_releases if r['new']])
+            # Count new releases from the final, combined list
+            new_count = sum(1 for r in self.releases if r.get('new', True))
             return new_count
         except Exception as e:
             logger.error(f"An error occurred during execution: {e}")
+            # Consider re-raising or specific error handling
+            import traceback
+            logger.error(traceback.format_exc())
             return -1
 
 
