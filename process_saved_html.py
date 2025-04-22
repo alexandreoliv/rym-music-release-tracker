@@ -4,6 +4,7 @@ from bs4 import BeautifulSoup
 from datetime import datetime
 from pathlib import Path
 import logging
+import webbrowser
 
 # Configure logging
 logging.basicConfig(
@@ -517,6 +518,13 @@ class SavedHtmlProcessor:
             logger.info("Music release processing completed successfully")
             if html_file:
                 logger.info(f"View new releases at {html_file}")
+                
+                # Open the HTML file in the default web browser
+                try:
+                    logger.info(f"Opening {html_file} in web browser...")
+                    webbrowser.open(f"file://{os.path.abspath(html_file)}")
+                except Exception as e:
+                    logger.error(f"Failed to open HTML file in browser: {e}")
             
             # Count new releases from both regular and chart sources
             new_count = len([r for r in self.releases if r['new']]) + len([r for r in self.chart_releases if r['new']])
