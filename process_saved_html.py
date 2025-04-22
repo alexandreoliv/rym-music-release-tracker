@@ -44,6 +44,11 @@ class SavedHtmlProcessor:
             page_title = soup.title.string if soup.title else "No title found"
             logger.info(f"Page title: {page_title}")
             
+            # Check if this is the special Death metal albums list
+            is_death_metal_list = "Death metal albums of 2025" in page_title
+            if is_death_metal_list:
+                logger.info("Detected Death metal albums of 2025 list - will stop at UPCOMING marker")
+            
             # Check if this is a chart page
             chart_section = soup.find('section', id='page_charts_section_charts')
             if chart_section:
@@ -74,6 +79,13 @@ class SavedHtmlProcessor:
             
             file_releases = []
             for row in rows:
+                # For Death metal list, check if we've reached the UPCOMING marker
+                if is_death_metal_list:
+                    upcoming_marker = row.find('span', class_='rendered_text')
+                    if upcoming_marker and upcoming_marker.text.strip() == "UPCOMING":
+                        logger.info("Found UPCOMING marker in Death metal list - stopping processing")
+                        break
+                
                 # Skip header row or rows without the main entry
                 main_entry = row.find('td', class_='main_entry')
                 if not main_entry:
