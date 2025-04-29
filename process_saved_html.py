@@ -109,10 +109,20 @@ class SavedHtmlProcessor:
             page_title = soup.title.string if soup.title else "No title found"
             logger.info(f"Page title: {page_title.strip() if page_title else 'No title found'}")
             
-            # Check if this is the special Death metal albums list
+            # Check for specific list titles that need early stopping
             is_death_metal_list = page_title and "Death metal albums of 2025" in page_title 
+            is_death_metal_demos_list = page_title and "Death metal demos/EPs of 2025-29 by year" in page_title
+            
+            should_stop_early = False
+            stop_markers = []
             if is_death_metal_list:
                 logger.info("Detected Death metal albums of 2025 list - will stop at UPCOMING marker")
+                should_stop_early = True
+                stop_markers = ["UPCOMING"]
+            elif is_death_metal_demos_list:
+                logger.info("Detected Death metal demos/EPs list - will stop at UPCOMING or UPCOMING/UNLISTENED marker")
+                should_stop_early = True
+                stop_markers = ["UPCOMING", "UPCOMING/UNLISTENED"]
             
             # Check if this is a chart page - handle potential MHTML encoding remnants (less likely now)
             chart_section = soup.find('section', id='page_charts_section_charts')
@@ -148,12 +158,14 @@ class SavedHtmlProcessor:
             
             file_releases = []
             for row in rows:
-                # For Death metal list, check if we've reached the UPCOMING marker
-                if is_death_metal_list:
-                    upcoming_marker = row.find('span', class_='rendered_text')
-                    if upcoming_marker and upcoming_marker.text.strip() == "UPCOMING":
-                        logger.info("Found UPCOMING marker in Death metal list - stopping processing")
-                        break
+                # For specific lists, check if we've reached a stop marker
+                if should_stop_early:
+                    rendered_text_span = row.find('span', class_='rendered_text')
+                    if rendered_text_span:
+                        marker_text = rendered_text_span.text.strip().upper() # Check in uppercase
+                        if marker_text in stop_markers:
+                            logger.info(f"Found '{marker_text}' marker in specific list - stopping processing for this file")
+                            break
                 
                 # Skip header row or rows without the main entry
                 main_entry = row.find('td', class_='main_entry')
