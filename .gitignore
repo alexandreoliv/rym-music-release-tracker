@@ -1,5 +1,7 @@
 venv
+__pycache__
+.env
+
 saved_pages
 files
 *.txt
-.env

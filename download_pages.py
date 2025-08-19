@@ -141,6 +141,22 @@ def process_list_url(driver, base_url, page_counter, save_dir):
     
     return page_counter, pages_downloaded
 
+def cleanup_saved_pages(save_dir):
+    """Delete all files from the saved_pages directory"""
+    try:
+        if save_dir.exists():
+            print(f"Cleaning up saved pages directory: {save_dir}")
+            # Remove all files in the directory
+            for file_path in save_dir.iterdir():
+                if file_path.is_file():
+                    file_path.unlink()
+                    print(f"Deleted: {file_path}")
+            print("Cleanup completed successfully")
+        else:
+            print(f"Directory {save_dir} does not exist, nothing to clean up")
+    except Exception as e:
+        print(f"Error during cleanup: {e}")
+
 def download_pages():
     """Download all pages from the URLs list"""
     # Create saved_pages directory if it doesn't exist
@@ -179,6 +195,22 @@ def download_pages():
         
         print("\n=== Download Complete ===")
         print(f"Total pages downloaded: {total_pages_downloaded}")
+        
+        # Process the downloaded HTML files if any were downloaded
+        if total_pages_downloaded > 0:
+            print("\n=== Starting HTML Processing ===")
+            try:
+                from process_saved_html import SavedHtmlProcessor
+                processor = SavedHtmlProcessor(html_dir=str(save_dir))
+                new_count = processor.run()
+                print(f"HTML processing completed. Found {new_count if new_count >= 0 else 'unknown'} new releases.")
+            except Exception as e:
+                print(f"Error during HTML processing: {e}")
+            
+            # Clean up saved pages directory after processing
+            cleanup_saved_pages(save_dir)
+        else:
+            print("No pages were downloaded, skipping HTML processing")
                 
     finally:
         driver.quit()

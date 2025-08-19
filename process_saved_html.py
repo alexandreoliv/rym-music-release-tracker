@@ -89,7 +89,7 @@ class SavedHtmlProcessor:
         try:
             file_path_obj = Path(html_file)
             if file_path_obj.suffix.lower() == '.mhtml':
-                logger.info(f"Detected MHTML file, extracting HTML content...")
+                logger.info("Detected MHTML file, extracting HTML content...")
                 html_content_str = self._get_html_from_mhtml(html_file)
                 if not html_content_str:
                     logger.error(f"Could not extract HTML from MHTML: {html_file}")
@@ -586,13 +586,6 @@ class SavedHtmlProcessor:
             if not html_files:
                 logger.warning(f"No HTML files found in '{self.html_dir}' directory")
                 return 0
-            
-            total_processed = 0
-            # Process files and populate self.releases and self.chart_releases
-            for html_file_path in html_files:
-                count = self.process_html_file(html_file_path)
-                # Count here might not represent final unique count, just items found per file
-                # total_processed += count # This count isn't very meaningful anymore
             
             # Now combine and deduplicate
             self.remove_duplicates()
