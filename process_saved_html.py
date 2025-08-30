@@ -149,6 +149,17 @@ class SavedHtmlProcessor:
                     table_id = table.get('id', 'No ID')
                     table_class = table.get('class', []) # Ensure class is a list
                     logger.info(f"Table {i+1} - ID: {table_id}, Class: {table_class}")
+                    
+                    # Check if any table has rows with main_entry
+                    rows_with_main_entry = table.find_all('tr')
+                    main_entry_count = 0
+                    for row in rows_with_main_entry:
+                        if row.find('td', class_='main_entry'):
+                            main_entry_count += 1
+                    if main_entry_count > 0:
+                        logger.info(f"Table {i+1} has {main_entry_count} rows with main_entry class")
+                
+
                 
                 return 0
             
@@ -157,14 +168,14 @@ class SavedHtmlProcessor:
             logger.info(f"Found {len(rows)} rows in the table")
             
             file_releases = []
-            for row in rows:
+            
+            for i, row in enumerate(rows):
                 # For specific lists, check if we've reached a stop marker
                 if should_stop_early:
                     rendered_text_span = row.find('span', class_='rendered_text')
                     if rendered_text_span:
                         marker_text = rendered_text_span.text.strip().upper() # Check in uppercase
                         if marker_text in stop_markers:
-                            logger.info(f"Found '{marker_text}' marker in specific list - stopping processing for this file")
                             break
                 
                 # Skip header row or rows without the main entry
@@ -586,6 +597,16 @@ class SavedHtmlProcessor:
             if not html_files:
                 logger.warning(f"No HTML files found in '{self.html_dir}' directory")
                 return 0
+            
+            # Process each HTML file to extract releases
+            total_processed = 0
+            for html_file in html_files:
+                try:
+                    count = self.process_html_file(html_file)
+                    total_processed += count
+                except Exception as e:
+                    logger.error(f"Failed to process {html_file}: {e}")
+                    continue
             
             # Now combine and deduplicate
             self.remove_duplicates()
