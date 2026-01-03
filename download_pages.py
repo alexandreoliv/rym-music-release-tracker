@@ -1,14 +1,19 @@
+import os
 from selenium import webdriver
+from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.common.exceptions import TimeoutException, NoSuchElementException
 import time
 import random
-import os
 from pathlib import Path
 from dotenv import load_dotenv
 from urllib.parse import urljoin
+
+# SeleniumManager (built into Selenium 4.x) handles driver management better
+# webdriver-manager can have version detection issues, so we'll use SeleniumManager
+USE_WEBDRIVER_MANAGER = False
 
 # Load environment variables
 load_dotenv()
@@ -22,7 +27,12 @@ else:
     URLS = []
 
 # Load authentication cookies from environment variables
+# RYM uses these cookies for authentication:
+# - ulv: Main user login/session cookie (most important!)
+# - sec_id, sec_bs, sec_ts: Security tokens
+# - cf_clearance: Cloudflare clearance cookie
 COOKIES = {
+    "ulv": os.getenv('COOKIE_ULV'),  # Main session cookie - required for login!
     "cf_clearance": os.getenv('COOKIE_CF_CLEARANCE'),
     "sec_bs": os.getenv('COOKIE_SEC_BS'),
     "sec_id": os.getenv('COOKIE_SEC_ID'),
@@ -38,25 +48,89 @@ def setup_brave():
     # Add any additional options if needed
     options.add_argument('--no-sandbox')
     options.add_argument('--disable-dev-shm-usage')
+    options.add_argument('--disable-gpu')
+    # Prevent "data:," blank page issue
+    options.add_argument('--disable-blink-features=AutomationControlled')
+    options.add_experimental_option("excludeSwitches", ["enable-automation"])
+    options.add_experimental_option('useAutomationExtension', False)
     
-    # Create the driver
-    driver = webdriver.Chrome(options=options)
-    return driver
+    # Use SeleniumManager (built into Selenium 4.x) - it handles version detection automatically
+    # SeleniumManager will download the correct ChromeDriver version for your Brave browser
+    try:
+        service = Service()
+        driver = webdriver.Chrome(service=service, options=options)
+        return driver
+    except Exception as e:
+        print(f"Error setting up ChromeDriver: {e}")
+        print("\nTroubleshooting:")
+        print("1. Make sure Brave browser is installed at /usr/bin/brave-browser")
+        print("2. Check your internet connection (SeleniumManager needs to download ChromeDriver)")
+        print("3. If it hangs, try installing chromedriver manually:")
+        print("   Download from https://googlechromelabs.github.io/chrome-for-testing/")
+        print("   Extract and add to PATH, or specify path in Service(executable_path='/path/to/chromedriver')")
+        raise
 
 def add_cookies(driver):
     """Add authentication cookies to the browser"""
     # First visit the site to set domain for cookies
+    print("Navigating to rateyourmusic.com to set cookies...")
     driver.get("https://rateyourmusic.com")
-    time.sleep(2)  # Wait for page to load
+    
+    # Wait for page to load properly
+    try:
+        WebDriverWait(driver, 10).until(
+            EC.presence_of_element_located((By.TAG_NAME, "body"))
+        )
+    except TimeoutException:
+        print("Warning: Page load timeout, but continuing...")
+    
+    time.sleep(2)  # Additional wait to ensure page is ready
+    
+    # Debug: Show which cookies we're trying to add
+    print("\nCookies from .env file:")
+    for name, value in COOKIES.items():
+        if value:
+            print(f"  {name}: {value[:20]}..." if len(value) > 20 else f"  {name}: {value}")
+        else:
+            print(f"  {name}: NOT SET")
     
     # Add each cookie
+    cookies_added = 0
     for name, value in COOKIES.items():
-        cookie = {
-            'name': name,
-            'value': value,
-            'domain': '.rateyourmusic.com'
-        }
-        driver.add_cookie(cookie)
+        if value:  # Only add cookie if value is not None/empty
+            try:
+                cookie = {
+                    'name': name,
+                    'value': value,
+                    'domain': '.rateyourmusic.com',
+                    'path': '/',
+                    'secure': True,
+                    'sameSite': 'Lax'
+                }
+                driver.add_cookie(cookie)
+                cookies_added += 1
+                print(f"  Added cookie: {name}")
+            except Exception as e:
+                print(f"Warning: Could not add cookie {name}: {e}")
+    
+    print(f"\nAdded {cookies_added} cookies successfully")
+    
+    # CRITICAL: Refresh the page after adding cookies for them to take effect
+    print("Refreshing page to apply cookies...")
+    driver.refresh()
+    time.sleep(3)  # Wait for page to reload with cookies
+    
+    # Debug: Check if we're logged in by looking for sign-in button or username
+    try:
+        # Look for elements that indicate logged-in state
+        page_source = driver.page_source
+        if "Sign In" in page_source or "sign_in" in page_source.lower():
+            print("WARNING: Still seeing 'Sign In' - cookies may not be working!")
+            print("Make sure you have the COOKIE_ULV value set in .env")
+        else:
+            print("Login appears successful (no 'Sign In' button detected)")
+    except Exception as e:
+        print(f"Could not verify login status: {e}")
 
 def get_next_page_url(driver, current_url):
     """Extract the next page URL from the navigation if it exists"""
